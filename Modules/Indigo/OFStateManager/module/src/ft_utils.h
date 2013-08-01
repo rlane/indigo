@@ -126,17 +126,6 @@ ft_flow_set_effects(ft_entry_t *entry,
  */
 
 /**
- * Map a priority to a hash bucket
- */
-
-static inline int
-prio_to_bucket_index(ft_instance_t ft, uint16_t priority)
-{
-    return (murmur_hash(&priority, sizeof(priority), FT_HASH_SEED) %
-            ft->config.prio_bucket_count);
-}
-
-/**
  * Map a match structure to a hash bucket
  */
 
@@ -164,15 +153,12 @@ ft_entry_link(ft_instance_t ft, ft_entry_t *entry)
     /* Link to full table iteration */
     list_push(&ft->all_list, &entry->table_links);
 
-    if (ft->prio_buckets) { /* Priority hash */
-        idx = prio_to_bucket_index(ft, entry->priority);
-        list_push(&ft->prio_buckets[idx], &entry->prio_links);
-    }
     if (ft->match_buckets) { /* Strict match hash */
         idx = match_to_bucket_index(ft, &entry->match);
         list_push(&ft->match_buckets[idx], &entry->match_links);
     }
 
+    hmap_insert(ft->priority_map, entry);
     hmap_insert(ft->flow_id_map, entry);
 }
 
@@ -193,17 +179,13 @@ ft_entry_unlink(ft_instance_t ft, ft_entry_t *entry)
     /* Remove from full table iteration */
     list_remove(&entry->table_links);
 
-    if (ft->prio_buckets) { /* Priority hash */
-        FT_ASSERT(!list_empty(&ft->prio_buckets[prio_to_bucket_index(ft,
-            entry->priority)]));
-        list_remove(&entry->prio_links);
-    }
     if (ft->match_buckets) { /* Strict match hash */
         FT_ASSERT(!list_empty(&ft->match_buckets[match_to_bucket_index(ft,
             &entry->match)]));
         list_remove(&entry->match_links);
     }
 
+    hmap_remove(ft->priority_map, entry);
     hmap_remove(ft->flow_id_map, entry);
 }
 
