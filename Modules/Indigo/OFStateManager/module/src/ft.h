@@ -149,8 +149,6 @@ struct ft_public_s {
     list_head_t free_list;         /* List of unused entries */
     list_head_t all_list;          /* Single list of all current entries */
 
-    list_head_t *match_buckets;    /* Array of strict match based buckets */
-
     struct hindex *flow_id_index;  /* hashtable keyed on flow id */
     struct hindex *priority_index; /* hashtable keyed on priority */
     struct hindex *match_index;    /* hashtable keyed on strict match */
