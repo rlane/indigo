@@ -152,21 +152,21 @@ struct ft_public_s {
 /* These defines come from the original table driven version */
 /* Redefine FT macros to use hash table or generic calls */
 #define FT_ADD(_ft, _id, _flow_add, _entry_p)                           \
-    ft_hash_flow_add(_ft, _id, _flow_add, _entry_p)
+    ft_add(_ft, _id, _flow_add, _entry_p)
 #define FT_DELETE_ID(_ft, _id)                                          \
-    ft_hash_flow_delete_id(_ft, _id)
+    ft_delete_id(_ft, _id)
 #define FT_MARK_ENTRIES(_ft, _q, _state, _reason)                       \
     (FT_DRIVER(_ft)->mark_entries((_ft), (_q), (_state), (_reason)))
 #define FT_ENTRY_FREE(_ft, _entry)                                      \
-    ft_hash_flow_delete(_ft, _entry)
+    ft_delete(_ft, _entry)
 #define FT_QUERY(_ft, _q)                                               \
-    ft_flow_query(_ft, _q)
+    ft_query(_ft, _q)
 #define FT_FIRST_MATCH(_ft, _q, _entry_p)                               \
-    ft_flow_first_match(_ft, _q, _entry_p)
+    ft_first_match(_ft, _q, _entry_p)
 #define FT_MODIFY_EFFECTS(_ft, _entry, _flow_mod)                       \
-    ft_flow_modify_effects(_ft, _entry, _flow_mod)
+    ft_entry_modify_effects(_ft, _entry, _flow_mod)
 #define FT_CLEAR_COUNTERS(_ft, _entry, _pkts, _bytes)                   \
-    ft_flow_clear_counters(_ft, _entry, _pkts, _bytes)
+    ft_entry_clear_counters(_ft, _entry, _pkts, _bytes)
 
 /**
  * Safe iterator for entire flow table
@@ -199,7 +199,7 @@ struct ft_public_s {
  * If config->max_entries <= 0, use the default size
  */
 
-ft_instance_t ft_hash_create(ft_config_t *config);
+ft_instance_t ft_create(ft_config_t *config);
 
 /**
  * Delete a flow table instance and free resources
@@ -210,7 +210,7 @@ ft_instance_t ft_hash_create(ft_config_t *config);
  * Free underlying data structures
  */
 
-void ft_hash_delete(ft_instance_t ft);
+void ft_destroy(ft_instance_t ft);
 
 /**
  * Add a flow entry to the table
@@ -222,10 +222,10 @@ void ft_hash_delete(ft_instance_t ft);
  * If the entry already exists, an error is returned.
  */
 
-indigo_error_t ft_hash_flow_add(ft_instance_t ft,
-                                indigo_flow_id_t id,
-                                of_flow_add_t *flow_add,
-                                ft_entry_t **entry_p);
+indigo_error_t ft_add(ft_instance_t ft,
+                      indigo_flow_id_t id,
+                      of_flow_add_t *flow_add,
+                      ft_entry_t **entry_p);
 
 /**
  * Remove a specific flow entry from the table
@@ -233,19 +233,19 @@ indigo_error_t ft_hash_flow_add(ft_instance_t ft,
  * @param entry Pointer to the entry to be removed
  */
 
-indigo_error_t ft_hash_flow_delete(ft_instance_t ft,
-                                   ft_entry_t *entry);
+indigo_error_t ft_delete(ft_instance_t ft,
+                         ft_entry_t *entry);
 
 /**
  * Remove a flow entry from the table indicated by flow ID
  * @param ft The flow table handle
  * @param id Flow ID of the entry to remove
  *
- * Just looks up the entry and calls ft_hash_flow_delete.
+ * Just looks up the entry and calls ft_entry_delete.
  */
 
-indigo_error_t ft_hash_flow_delete_id(ft_instance_t ft,
-                                      indigo_flow_id_t id);
+indigo_error_t ft_delete_id(ft_instance_t ft,
+                            indigo_flow_id_t id);
 
 /**
  * Query the flow table and return the first match if found
@@ -257,9 +257,9 @@ indigo_error_t ft_hash_flow_delete_id(ft_instance_t ft,
  * entry_ptr may be NULL; Normally this is called with priority checked.
  */
 
-indigo_error_t ft_flow_first_match(ft_instance_t instance,
-                                   of_meta_match_t *query,
-                                   ft_entry_t **entry_ptr);
+indigo_error_t ft_first_match(ft_instance_t instance,
+                              of_meta_match_t *query,
+                              ft_entry_t **entry_ptr);
 
 /**
  * Query the flow table and return all matches
@@ -270,8 +270,8 @@ indigo_error_t ft_flow_first_match(ft_instance_t instance,
  * @fixme Currently we don't/can't check for failed alloc in biglist.
  */
 
-biglist_t *ft_flow_query(ft_instance_t instance,
-                         of_meta_match_t *query);
+biglist_t *ft_query(ft_instance_t instance,
+                    of_meta_match_t *query);
 
 /**
  * Look up a flow by ID
@@ -281,7 +281,7 @@ biglist_t *ft_flow_query(ft_instance_t instance,
  */
 
 ft_entry_t *
-ft_id_lookup(ft_instance_t ft, indigo_flow_id_t id);
+ft_lookup(ft_instance_t ft, indigo_flow_id_t id);
 
 /**
  * Modify the effects of a flow entry in the table
@@ -293,9 +293,9 @@ ft_id_lookup(ft_instance_t ft, indigo_flow_id_t id);
  */
 
 indigo_error_t
-ft_flow_modify_effects(ft_instance_t instance,
-                       ft_entry_t *entry,
-                       of_flow_modify_t *flow_mod);
+ft_entry_modify_effects(ft_instance_t instance,
+                        ft_entry_t *entry,
+                        of_flow_modify_t *flow_mod);
 
 /**
  * Clear the counters associated with a specific entry in the table
@@ -307,7 +307,7 @@ ft_flow_modify_effects(ft_instance_t instance,
  */
 
 indigo_error_t
-ft_flow_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes);
+ft_entry_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes);
 
 /**
  * Start the delete process for an entry.
@@ -322,8 +322,8 @@ ft_flow_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes);
  */
 
 void
-ft_flow_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
-                     indigo_fi_flow_removed_t reason);
+ft_entry_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
+                      indigo_fi_flow_removed_t reason);
 
 /**
  * Spawn a task that iterates over the flowtable

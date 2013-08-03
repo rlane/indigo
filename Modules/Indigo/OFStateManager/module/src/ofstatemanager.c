@@ -434,7 +434,7 @@ ind_core_init(ind_core_config_t *config)
     }
     ft_config.max_entries = config->max_flowtable_entries;
 
-    if ((ind_core_ft = ft_hash_create(&ft_config)) == NULL) {
+    if ((ind_core_ft = ft_create(&ft_config)) == NULL) {
         LOG_ERROR("Unable to allocate flow table\n");
         return INDIGO_ERROR_RESOURCE;
     }
@@ -513,7 +513,7 @@ void
 ind_core_flow_entry_delete(ft_entry_t *entry, indigo_fi_flow_removed_t reason)
 {
     /* Mark the flow deleted or pending in OF state mgr table */
-    ft_flow_mark_deleted(ind_core_ft, entry, reason);
+    ft_entry_mark_deleted(ind_core_ft, entry, reason);
 
     /* If it is not pending, notify forwarding; final cleanup occurs in
      * flow deleted callback. */
@@ -596,7 +596,7 @@ indigo_core_flow_removed(indigo_fi_flow_removed_t reason,
               INDIGO_FLOW_ID_PRINTF_ARG((indigo_cookie_t) stats->flow_id));
 
     /* After entry look up, this looks like flow delete callback */
-    entry = ft_id_lookup(ind_core_ft, stats->flow_id);
+    entry = ft_lookup(ind_core_ft, stats->flow_id);
     if (entry == NULL) {
         LOG_TRACE("Async flow removed: did not find entry in SM table. id "
                   INDIGO_FLOW_ID_PRINTF_FORMAT,
@@ -694,7 +694,7 @@ ind_core_finish(void)
         ind_core_enable_set(0);
     }
 
-    ft_hash_delete(ind_core_ft);
+    ft_destroy(ind_core_ft);
 
     ind_core_init_done = 0;
 
@@ -999,7 +999,7 @@ flow_expiration_timer_cb(struct ind_core_flow_stats_state *state,
     }
 
     /* @fixme Too bad we have to lookup here */
-    entry = ft_id_lookup(ind_core_ft, flow_stats->flow_id);
+    entry = ft_lookup(ind_core_ft, flow_stats->flow_id);
     if (entry == NULL) {
         LOG_ERROR("failed to lookup flow during flow expiration callback");
         return;

@@ -41,7 +41,7 @@ static int match_equality(const void *key1, const void *key2);
 static inline int entry_has_out_port(ft_entry_t *entry, of_port_no_t port);
 
 ft_instance_t
-ft_hash_create(ft_config_t *config)
+ft_create(ft_config_t *config)
 {
     ft_instance_t ft;
     int bytes;
@@ -95,7 +95,7 @@ ft_hash_create(ft_config_t *config)
 }
 
 void
-ft_hash_delete(ft_instance_t ft)
+ft_destroy(ft_instance_t ft)
 {
     ft_entry_t *entry;
     list_links_t *cur, *next;
@@ -130,8 +130,8 @@ ft_hash_delete(ft_instance_t ft)
 }
 
 indigo_error_t
-ft_hash_flow_add(ft_instance_t ft, indigo_flow_id_t id,
-                 of_flow_add_t *flow_add, ft_entry_t **entry_p)
+ft_add(ft_instance_t ft, indigo_flow_id_t id,
+       of_flow_add_t *flow_add, ft_entry_t **entry_p)
 {
     ft_entry_t *entry;
     list_links_t *links;
@@ -140,7 +140,7 @@ ft_hash_flow_add(ft_instance_t ft, indigo_flow_id_t id,
     LOG_TRACE("Adding flow " INDIGO_FLOW_ID_PRINTF_FORMAT, id);
 
     /* If flow ID already exists, error. */
-    if (ft_id_lookup(ft, id) != NULL) {
+    if (ft_lookup(ft, id) != NULL) {
         return INDIGO_ERROR_EXISTS;
     }
 
@@ -167,7 +167,7 @@ ft_hash_flow_add(ft_instance_t ft, indigo_flow_id_t id,
 }
 
 indigo_error_t
-ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry)
+ft_delete(ft_instance_t ft, ft_entry_t *entry)
 {
     LOG_TRACE("Delete rsn %d flow " INDIGO_FLOW_ID_PRINTF_FORMAT,
               entry->removed_reason, entry->id);
@@ -190,23 +190,23 @@ ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry)
 }
 
 indigo_error_t
-ft_hash_flow_delete_id(ft_instance_t ft,
+ft_delete_id(ft_instance_t ft,
                        indigo_flow_id_t id)
 {
     ft_entry_t *entry;
 
-    if ((entry = ft_id_lookup(ft, id)) == NULL) {
+    if ((entry = ft_lookup(ft, id)) == NULL) {
         LOG_VERBOSE("Delete: Failed to find flow "
                     INDIGO_FLOW_ID_PRINTF_FORMAT, id);
         return INDIGO_ERROR_NOT_FOUND;
     }
-    return ft_hash_flow_delete(ft, entry);
+    return ft_delete(ft, entry);
 }
 
 indigo_error_t
-ft_flow_first_match(ft_instance_t instance,
-                    of_meta_match_t *query,
-                    ft_entry_t **entry_ptr)
+ft_first_match(ft_instance_t instance,
+               of_meta_match_t *query,
+               ft_entry_t **entry_ptr)
 {
     ft_entry_t *entry;
     list_links_t *cur, *next;
@@ -216,7 +216,7 @@ ft_flow_first_match(ft_instance_t instance,
         while ((entry = hindex_lookup(instance->match_index,
                                     &query->match, &state)) != NULL) {
             if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
+                    ft_entry_meta_match(query, entry)) {
                 if (entry_ptr) {
                     *entry_ptr = entry;
                 }
@@ -228,7 +228,7 @@ ft_flow_first_match(ft_instance_t instance,
         while ((entry = hindex_lookup(instance->priority_index,
                                     &query->priority, &state)) != NULL) {
             if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
+                    ft_entry_meta_match(query, entry)) {
                 if (entry_ptr) {
                     *entry_ptr = entry;
                 }
@@ -238,7 +238,7 @@ ft_flow_first_match(ft_instance_t instance,
     } else { /* Iterate thru whole list */
         FT_ITER(instance, entry, cur, next) {
             if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
+                    ft_entry_meta_match(query, entry)) {
                 if (entry_ptr) {
                     *entry_ptr = entry;
                 }
@@ -251,7 +251,7 @@ ft_flow_first_match(ft_instance_t instance,
 }
 
 biglist_t *
-ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
+ft_query(ft_instance_t instance, of_meta_match_t *query)
 {
     ft_entry_t *entry;
     list_links_t *cur, *next;
@@ -263,7 +263,7 @@ ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
         while ((entry = hindex_lookup(instance->match_index,
                                     &query->match, &state)) != NULL) {
             if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
+                    ft_entry_meta_match(query, entry)) {
                 list = biglist_prepend(list, (void *)entry);
                 count += 1;
             }
@@ -274,7 +274,7 @@ ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
         while ((entry = hindex_lookup(instance->priority_index,
                                     &query->priority, &state)) != NULL) {
             if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
+                    ft_entry_meta_match(query, entry)) {
                 list = biglist_prepend(list, (void *)entry);
                 count += 1;
             }
@@ -282,7 +282,7 @@ ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
     } else { /* Iterate thru whole list */
         FT_ITER(instance, entry, cur, next) {
             if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
+                    ft_entry_meta_match(query, entry)) {
                 list = biglist_prepend(list, (void *)entry);
                 count += 1;
             }
@@ -294,13 +294,13 @@ ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
 }
 
 ft_entry_t *
-ft_id_lookup(ft_instance_t ft, indigo_flow_id_t id)
+ft_lookup(ft_instance_t ft, indigo_flow_id_t id)
 {
     return hindex_lookup(ft->flow_id_index, &id, NULL);
 }
 
 int
-ft_flow_meta_match(of_meta_match_t *query, ft_entry_t *entry)
+ft_entry_meta_match(of_meta_match_t *query, ft_entry_t *entry)
 {
     uint64_t mask;
     int rv = 0; /* Default is no match */
@@ -369,8 +369,8 @@ ft_flow_meta_match(of_meta_match_t *query, ft_entry_t *entry)
 }
 
 void
-ft_flow_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
-                     indigo_fi_flow_removed_t reason)
+ft_entry_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
+                      indigo_fi_flow_removed_t reason)
 {
     if (FT_FLOW_STATE_IS_DELETED(entry->state)) {
         return;
@@ -383,9 +383,9 @@ ft_flow_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
 }
 
 indigo_error_t
-ft_flow_modify_effects(ft_instance_t instance,
-                       ft_entry_t *entry,
-                       of_flow_modify_t *flow_mod)
+ft_entry_modify_effects(ft_instance_t instance,
+                        ft_entry_t *entry,
+                        of_flow_modify_t *flow_mod)
 {
     indigo_error_t err;
 
@@ -401,7 +401,7 @@ ft_flow_modify_effects(ft_instance_t instance,
 }
 
 indigo_error_t
-ft_flow_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes)
+ft_entry_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes)
 {
     if (packets) {
         *packets = entry->packets;
@@ -457,7 +457,7 @@ ft_iter_task_callback(void *cookie)
                 continue;
             }
 
-            if (state->use_query && !ft_flow_meta_match(&state->query, entry)) {
+            if (state->use_query && !ft_entry_meta_match(&state->query, entry)) {
                 continue;
             }
 

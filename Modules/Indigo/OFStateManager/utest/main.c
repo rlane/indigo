@@ -352,7 +352,7 @@ depopulate_table(ft_instance_t ft)
 
     count = ft->status.current_count;
     for (idx = 0; idx < count; ++idx) {
-        entry = ft_id_lookup(ft, TEST_KEY(idx));
+        entry = ft_lookup(ft, TEST_KEY(idx));
         TEST_ASSERT(entry != NULL);
         TEST_ASSERT(entry->match.fields.eth_type == TEST_ETH_TYPE(idx));
         FT_DELETE_ID(ft, TEST_KEY(idx));
@@ -401,14 +401,14 @@ test_ft_hash(void)
     int count;
 
     /* Test edge cases for create/destroy */
-    ft_hash_delete(NULL);
+    ft_destroy(NULL);
 
-    ft = ft_hash_create(&config);
+    ft = ft_create(&config);
     TEST_ASSERT(ft != NULL);
-    ft_hash_delete(ft);
+    ft_destroy(ft);
 
     /* Create, add two entries, delete without emptying */
-    ft = ft_hash_create(&config);
+    ft = ft_create(&config);
     TEST_ASSERT(ft != NULL);
 
     flow_add = of_flow_add_new(OF_VERSION_1_0);
@@ -420,11 +420,11 @@ test_ft_hash(void)
 
     TEST_ASSERT(ft->status.current_count == 2);
     TEST_ASSERT(check_table_entry_states(ft) == 0);
-    entry = ft_id_lookup(ft, TEST_ENT_ID);
-    ft_hash_delete(ft);
+    entry = ft_lookup(ft, TEST_ENT_ID);
+    ft_destroy(ft);
 
     /* Test simple cases for hash table */
-    ft = ft_hash_create(&config);
+    ft = ft_create(&config);
     TEST_ASSERT(ft != NULL);
 
     /* Set up flow add structure */
@@ -437,10 +437,10 @@ test_ft_hash(void)
     TEST_INDIGO_OK(FT_ADD(ft, TEST_ENT_ID, flow_add, &entry));
     TEST_ASSERT(ft->status.current_count == 1);
     TEST_ASSERT(check_table_entry_states(ft) == 0);
-    entry = ft_id_lookup(ft, TEST_ENT_ID);
+    entry = ft_lookup(ft, TEST_ENT_ID);
 
     /* Should not find next id */
-    entry = ft_id_lookup(ft, TEST_ENT_ID + 1);
+    entry = ft_lookup(ft, TEST_ENT_ID + 1);
     TEST_ASSERT(entry == NULL);
 
     /* Set up the query structure */
@@ -550,11 +550,11 @@ test_ft_hash(void)
     FT_DELETE_ID(ft, TEST_ENT_ID);
 
     /* Delete the table */
-    ft_hash_delete(ft);
+    ft_destroy(ft);
 
     /* Create a new flow table and add TEST_FLOW_COUNT entries. Do some queries */
     config.max_entries = TEST_FLOW_COUNT;
-    ft = ft_hash_create(&config);
+    ft = ft_create(&config);
     TEST_ASSERT(ft != NULL);
     TEST_OK(populate_table(ft, TEST_FLOW_COUNT, &query.match));
     orig_eth_type = query.match.fields.eth_type; /* Last ethtype added */
@@ -615,7 +615,7 @@ test_ft_hash(void)
 
     TEST_OK(depopulate_table(ft));
     TEST_ASSERT(check_bucket_counts(ft, 0) == 0);
-    ft_hash_delete(ft);
+    ft_destroy(ft);
     ft = NULL;
 
     /* @todo Check for memory consistency */
@@ -636,7 +636,7 @@ iter_task_cb(void *cookie, ft_entry_t *entry)
     if (entry != NULL) {
         state->finished = 0;
         state->entries_seen++;
-        ASSERT(ft_hash_flow_delete(state->ft, entry) == 0);
+        ASSERT(ft_delete(state->ft, entry) == 0);
     } else {
         state->finished = 1;
     }
@@ -653,7 +653,7 @@ test_ft_iter_task(void)
     ft_entry_t *entry1, *entry2;
     struct iter_task_state state;
 
-    ft = ft_hash_create(&config);
+    ft = ft_create(&config);
 
     flow_add1 = of_flow_add_new(OF_VERSION_1_0);
     of_flow_add_OF_VERSION_1_0_populate(flow_add1, 1);
@@ -678,7 +678,7 @@ test_ft_iter_task(void)
     TEST_ASSERT(state.entries_seen == 2);
     TEST_ASSERT(ft->status.current_count == 0);
 
-    ft_hash_delete(ft);
+    ft_destroy(ft);
 
     return TEST_PASS;
 }
