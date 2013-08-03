@@ -29,13 +29,6 @@
 #include "ofstatemanager_log.h"
 #include "ft.h"
 
-/* Unless directed otherwise, do basic sanity checking */
-#if !defined(FT_NO_ERROR_CHECKING)
-#define FT_ASSERT(cond) INDIGO_ASSERT(cond)
-#else
-#define FT_ASSERT(cond)
-#endif
-
 static indigo_error_t ft_entry_setup(ft_entry_t *entry, indigo_flow_id_t id, of_flow_add_t *flow_add);
 static void ft_entry_clear(ft_instance_t ft, ft_entry_t *entry);
 static biglist_t *out_port_list_populate_from_actions(of_list_action_t *actions);
@@ -545,7 +538,7 @@ static void
 ft_entry_link(ft_instance_t ft, ft_entry_t *entry)
 {
     if (ft == NULL || entry == NULL) {
-        FT_ASSERT(!"ft_entry_link called with NULL ft or entry");
+        INDIGO_ASSERT(!"ft_entry_link called with NULL ft or entry");
         return;
     }
 
@@ -565,11 +558,11 @@ static void
 ft_entry_unlink(ft_instance_t ft, ft_entry_t *entry)
 {
     if (ft == NULL || entry == NULL) {
-        FT_ASSERT(!"ft_entry_unlink called with NULL ft or entry");
+        INDIGO_ASSERT(!"ft_entry_unlink called with NULL ft or entry");
         return;
     }
 
-    FT_ASSERT(!list_empty(&ft->all_list));
+    INDIGO_ASSERT(!list_empty(&ft->all_list));
 
     /* Remove from full table iteration */
     list_remove(&entry->table_links);
