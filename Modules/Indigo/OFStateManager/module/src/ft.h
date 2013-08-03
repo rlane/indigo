@@ -111,9 +111,6 @@ typedef void (*ft_entry_deleted_f)(ft_instance_t ft,
 /**
  * Flow table configuration structure
  * @param max_entries Maximum number of entries to support
- * @param prio_bucket_count How many buckets for priority hash table
- * @param match_bucket_count How many buckets for match hash table
- * @param flow_id_bucket_count How many buckets for flow_id hash table
  * @param entry_deleted_callback Callback made for async deletes
  * @param deleted_cookie Data passed to entry_deleted_callback
  *
@@ -126,9 +123,6 @@ typedef void (*ft_entry_deleted_f)(ft_instance_t ft,
 
 typedef struct ft_config_s {
     int max_entries;
-    int prio_bucket_count;
-    int match_bucket_count;
-    int flow_id_bucket_count;
     ft_entry_deleted_f entry_deleted_cb;
     void *deleted_cookie;
 } ft_config_t;

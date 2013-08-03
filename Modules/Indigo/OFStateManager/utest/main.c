@@ -399,9 +399,6 @@ test_ft_hash(void)
     ft_instance_t ft;
     ft_config_t config = {
         16, /* Max entries */
-        1024, /* prio buckets */
-        1024, /* match buckets */
-        1024, /* flow_id buckets */
         entry_deleted, /* callback */
         NULL /* cookie */
     };
@@ -664,9 +661,6 @@ test_ft_iter_task(void)
     ft_instance_t ft;
     ft_config_t config = {
         16, /* Max entries */
-        1024, /* prio buckets */
-        1024, /* match buckets */
-        1024, /* flow_id buckets */
         entry_deleted, /* callback */
         NULL /* cookie */
     };
