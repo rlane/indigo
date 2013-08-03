@@ -436,9 +436,6 @@ ind_core_init(ind_core_config_t *config)
     }
     ft_config.max_entries = config->max_flowtable_entries;
 
-    ft_config.entry_deleted_cb = NULL;
-    ft_config.deleted_cookie = NULL;
-
     if ((ind_core_ft = ft_hash_create(&ft_config)) == NULL) {
         LOG_ERROR("Unable to allocate flow table\n");
         return INDIGO_ERROR_RESOURCE;

@@ -75,15 +75,6 @@
 #define TEST_ETH_TYPE(idx) ((idx) + 1)
 #define TEST_KEY(idx) (2 * ((idx) + 1))
 
-static void
-entry_deleted(ft_instance_t ft, ft_entry_t *entry, void *cookie)
-{
-    (void)cookie;
-    (void)ft;
-    (void)entry;
-    AIM_LOG_VERBOSE("Entry deleted callback");
-}
-
 /****************************************************************
  * Stubs
  ****************************************************************/
@@ -399,8 +390,6 @@ test_ft_hash(void)
     ft_instance_t ft;
     ft_config_t config = {
         16, /* Max entries */
-        entry_deleted, /* callback */
-        NULL /* cookie */
     };
     of_flow_add_t *flow_add;
     of_meta_match_t query;
@@ -661,8 +650,6 @@ test_ft_iter_task(void)
     ft_instance_t ft;
     ft_config_t config = {
         16, /* Max entries */
-        entry_deleted, /* callback */
-        NULL /* cookie */
     };
     of_flow_add_t *flow_add1, *flow_add2;
     ft_entry_t *entry1, *entry2;

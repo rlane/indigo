@@ -192,10 +192,6 @@ ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry, int make_callback)
         return INDIGO_ERROR_UNKNOWN;
     }
 
-    if (make_callback && ft->config.entry_deleted_cb) {
-        ft->config.entry_deleted_cb(ft, entry, ft->config.deleted_cookie);
-    }
-
     /* Unlink from hash lists; clear entry; put it on the free list */
     ft_entry_unlink(ft, entry);
     ft_entry_clear(ft, entry);

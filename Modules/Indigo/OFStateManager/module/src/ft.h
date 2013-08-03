@@ -94,37 +94,12 @@ typedef ft_public_t *ft_instance_t;
  ****************************************************************/
 
 /**
- * Callback prototype for notifying of a deleted entry
- * @param ft Handle for a flow table instance
- * @param entry Pointer to the entry that was deleted
- * @param cookie Data passed on flow table create
- *
- * It is required that the table driver will make no reference to the flow_add
- * pointer after this callback returns.
- */
-typedef void (*ft_entry_deleted_f)(ft_instance_t ft,
-                                   ft_entry_t *entry,
-                                   void *cookie);
-
-
-
-/**
  * Flow table configuration structure
  * @param max_entries Maximum number of entries to support
- * @param entry_deleted_callback Callback made for async deletes
- * @param deleted_cookie Data passed to entry_deleted_callback
- *
- * If entry_deleted_callback is NULL, no callbacks will be made when table
- * entries are deleted.
- *
- * Note that entry_deleted_callback may be called when the flow_delete
- * driver function is called based on the flags passed to the flow_delete call.
  */
 
 typedef struct ft_config_s {
     int max_entries;
-    ft_entry_deleted_f entry_deleted_cb;
-    void *deleted_cookie;
 } ft_config_t;
 
 /**
