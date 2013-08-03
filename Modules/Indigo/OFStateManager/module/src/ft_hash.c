@@ -170,12 +170,10 @@ ft_hash_flow_add(ft_instance_t ft, indigo_flow_id_t id,
  * Remove a specific flow entry from the table
  * @param ft The flow table handle
  * @param entry Pointer to the entry to be removed
- * @param make_callback Boolean indicating if a callback should be
- * made on the entry
  */
 
 indigo_error_t
-ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry, int make_callback)
+ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry)
 {
     LOG_TRACE("Delete rsn %d flow " INDIGO_FLOW_ID_PRINTF_FORMAT,
               entry->removed_reason, entry->id);
@@ -201,16 +199,13 @@ ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry, int make_callback)
  * Remove a flow entry from the table indicated by flow ID
  * @param ft The flow table handle
  * @param id Flow ID of the entry to remove
- * @param make_callback Boolean indicating if a callback should be
- * made on the entry
  *
  * Just looks up the entry and calls the above.
  */
 
 indigo_error_t
 ft_hash_flow_delete_id(ft_instance_t ft,
-                       indigo_flow_id_t id,
-                       int make_callback)
+                       indigo_flow_id_t id)
 {
     ft_entry_t *entry;
 
@@ -219,14 +214,14 @@ ft_hash_flow_delete_id(ft_instance_t ft,
                     INDIGO_FLOW_ID_PRINTF_FORMAT, id);
         return INDIGO_ERROR_NOT_FOUND;
     }
-    return ft_hash_flow_delete(ft, entry, make_callback);
+    return ft_hash_flow_delete(ft, entry);
 }
 
 /**
  * Delete a flow table instance and free resources
  * @param ft A handle for the flow table instance to be deleted
  *
- * Will call delete entry on each instance without making callback
+ * Will call ft_entry_clear on all entries.
  *
  * Free underlying data structures
  */

@@ -357,7 +357,7 @@ depopulate_table(ft_instance_t ft)
         entry = ft_id_lookup(ft, TEST_KEY(idx));
         TEST_ASSERT(entry != NULL);
         TEST_ASSERT(entry->match.fields.eth_type == TEST_ETH_TYPE(idx));
-        FT_DELETE_ID(ft, TEST_KEY(idx), 1); /* Does callback */
+        FT_DELETE_ID(ft, TEST_KEY(idx));
         TEST_ASSERT(check_table_entry_states(ft) == 0);
     }
 
@@ -549,7 +549,7 @@ test_ft_hash(void)
     TEST_ASSERT(lookup_entry->id == TEST_ENT_ID);
     TEST_INDIGO_OK(FT_FIRST_MATCH(ft, &query, NULL));
 
-    FT_DELETE_ID(ft, TEST_ENT_ID, 1);
+    FT_DELETE_ID(ft, TEST_ENT_ID);
 
     /* Delete the table */
     ft_hash_delete(ft);
@@ -638,7 +638,7 @@ iter_task_cb(void *cookie, ft_entry_t *entry)
     if (entry != NULL) {
         state->finished = 0;
         state->entries_seen++;
-        ASSERT(ft_hash_flow_delete(state->ft, entry, 1) == 0);
+        ASSERT(ft_hash_flow_delete(state->ft, entry) == 0);
     } else {
         state->finished = 1;
     }

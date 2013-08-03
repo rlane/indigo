@@ -161,12 +161,12 @@ struct ft_public_s {
 /* Redefine FT macros to use hash table or generic calls */
 #define FT_ADD(_ft, _id, _flow_add, _entry_p)                           \
     ft_hash_flow_add(_ft, _id, _flow_add, _entry_p)
-#define FT_DELETE_ID(_ft, _id, _cb)                                     \
-    ft_hash_flow_delete_id(_ft, _id, _cb)
+#define FT_DELETE_ID(_ft, _id)                                          \
+    ft_hash_flow_delete_id(_ft, _id)
 #define FT_MARK_ENTRIES(_ft, _q, _state, _reason)                       \
     (FT_DRIVER(_ft)->mark_entries((_ft), (_q), (_state), (_reason)))
-#define FT_ENTRY_FREE(_ft, _entry, _cb)                                 \
-    ft_hash_flow_delete(_ft, _entry, _cb)
+#define FT_ENTRY_FREE(_ft, _entry)                                      \
+    ft_hash_flow_delete(_ft, _entry)
 #define FT_QUERY(_ft, _q)                                               \
     ft_flow_query(_ft, _q)
 #define FT_FIRST_MATCH(_ft, _q, _entry_p)                               \
