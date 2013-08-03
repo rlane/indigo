@@ -36,42 +36,275 @@
 #define FT_ASSERT(cond)
 #endif
 
+static indigo_error_t ft_entry_setup(ft_entry_t *entry, indigo_flow_id_t id, of_flow_add_t *flow_add);
+static void ft_entry_clear(ft_instance_t ft, ft_entry_t *entry);
 static biglist_t *out_port_list_populate_from_actions(of_list_action_t *actions);
 static biglist_t *out_port_list_populate_from_instructions(of_list_instruction_t *instructions);
 static indigo_error_t ft_flow_set_effects(ft_entry_t *entry, of_flow_modify_t *flow_mod);
 static void ft_entry_link(ft_instance_t ft, ft_entry_t *entry);
 static void ft_entry_unlink(ft_instance_t ft, ft_entry_t *entry);
-static indigo_error_t ft_entry_setup(ft_entry_t *entry, indigo_flow_id_t id, of_flow_add_t *flow_add);
-static void ft_entry_clear(ft_instance_t ft, ft_entry_t *entry);
+static uint32_t match_hash(const void *key);
+static int match_equality(const void *key1, const void *key2);
+static inline int entry_has_out_port(ft_entry_t *entry, of_port_no_t port);
 
-
-/**
- * Determine if the given entry has port as an output port
- */
-static inline int
-entry_has_out_port(ft_entry_t *entry, of_port_no_t port)
+ft_instance_t
+ft_hash_create(ft_config_t *config)
 {
-    biglist_t *elt;
-    of_port_no_t chk_port;
+    ft_instance_t ft;
+    int bytes;
+    int idx;
 
-    for (elt = entry->output_ports; elt != NULL; elt = elt->next) {
-        chk_port = (uintptr_t)elt->data;
-        if (port == chk_port) {
-            return 1;
+    if (config->max_entries <= 0) {
+        LOG_ERROR("Hash flow table only supports fixed number of buckets");
+        return NULL;
+    }
+
+    /* Allocate the flow table itself */
+    ft = INDIGO_MEM_ALLOC(sizeof(*ft));
+    if (ft == NULL) {
+        LOG_ERROR("ERROR: Flow table (hash) creation failed");
+        return NULL;
+    }
+    INDIGO_MEM_SET(ft, 0, sizeof(*ft));
+    INDIGO_MEM_COPY(&ft->config,  config, sizeof(ft_config_t));
+
+    list_init(&ft->free_list);
+    list_init(&ft->all_list);
+
+    /* Allocate and init the flow entries */
+    bytes = sizeof(ft_entry_t) * config->max_entries;
+    ft->flow_entries = INDIGO_MEM_ALLOC(bytes);
+    if (ft->flow_entries == NULL) {
+        LOG_ERROR("ERROR: Flow table (hash) creation failed");
+        INDIGO_MEM_FREE(ft);
+        return NULL;
+    }
+    INDIGO_MEM_SET(ft->flow_entries, 0, bytes);
+
+    /* Put the flow entries on the free list */
+    for (idx = 0; idx < config->max_entries; idx++) {
+        list_push(&ft->free_list, &ft->flow_entries[idx].table_links);
+    }
+
+    ft->match_index =
+        hindex_create(match_hash, match_equality,
+                      offsetof(struct ft_entry_s, match), 0);
+
+    ft->flow_id_index =
+        hindex_create(hindex_uint64_hash, hindex_uint64_equality,
+                      offsetof(struct ft_entry_s, id), 0);
+
+    ft->priority_index =
+        hindex_create(hindex_uint16_hash, hindex_uint16_equality,
+                      offsetof(struct ft_entry_s, priority), 0);
+
+    return ft;
+}
+
+void
+ft_hash_delete(ft_instance_t ft)
+{
+    ft_entry_t *entry;
+    list_links_t *cur, *next;
+
+    if (ft == NULL) {
+        return;
+    }
+
+    FT_ITER(ft, entry, cur, next) {
+        ft_entry_unlink(ft, entry);
+        ft_entry_clear(ft, entry);
+    }
+
+    if (ft->flow_entries != NULL) {
+        INDIGO_MEM_FREE(ft->flow_entries);
+        ft->flow_entries = NULL;
+    }
+
+    if (ft->flow_id_index != NULL) {
+        hindex_destroy(ft->flow_id_index);
+    }
+
+    if (ft->priority_index != NULL) {
+        hindex_destroy(ft->priority_index);
+    }
+
+    if (ft->match_index != NULL) {
+        hindex_destroy(ft->match_index);
+    }
+
+    INDIGO_MEM_FREE(ft);
+}
+
+indigo_error_t
+ft_hash_flow_add(ft_instance_t ft, indigo_flow_id_t id,
+                 of_flow_add_t *flow_add, ft_entry_t **entry_p)
+{
+    ft_entry_t *entry;
+    list_links_t *links;
+    indigo_error_t rv;
+
+    LOG_TRACE("Adding flow " INDIGO_FLOW_ID_PRINTF_FORMAT, id);
+
+    /* If flow ID already exists, error. */
+    if (ft_id_lookup(ft, id) != NULL) {
+        return INDIGO_ERROR_EXISTS;
+    }
+
+    /* Grab an entry from the free list */
+    if ((links = list_pop(&ft->free_list)) == NULL) {
+        ++(ft->status.table_full_errors);
+        return INDIGO_ERROR_RESOURCE;
+    }
+    entry = FT_ENTRY_CONTAINER(links, table);
+
+    if ((rv = ft_entry_setup(entry, id, flow_add)) < 0) {
+        return rv;
+    }
+
+    ft_entry_link(ft, entry);
+    ft->status.adds += 1;
+    ft->status.current_count += 1;
+
+    if (entry_p != NULL) {
+        *entry_p = entry;
+    }
+
+    return INDIGO_ERROR_NONE;
+}
+
+indigo_error_t
+ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry)
+{
+    LOG_TRACE("Delete rsn %d flow " INDIGO_FLOW_ID_PRINTF_FORMAT,
+              entry->removed_reason, entry->id);
+
+    if (entry->id == INDIGO_FLOW_ID_INVALID) {
+        LOG_ERROR("Deleting invalid flow table entry");
+        return INDIGO_ERROR_UNKNOWN;
+    }
+
+    /* Unlink from hash lists; clear entry; put it on the free list */
+    ft_entry_unlink(ft, entry);
+    ft_entry_clear(ft, entry);
+
+    INDIGO_ASSERT(entry->state == FT_FLOW_STATE_FREE);
+    list_push(&ft->free_list, &entry->table_links);
+    ft->status.current_count -= 1;
+    ft->status.deletes += 1;
+
+    return INDIGO_ERROR_NONE;
+}
+
+indigo_error_t
+ft_hash_flow_delete_id(ft_instance_t ft,
+                       indigo_flow_id_t id)
+{
+    ft_entry_t *entry;
+
+    if ((entry = ft_id_lookup(ft, id)) == NULL) {
+        LOG_VERBOSE("Delete: Failed to find flow "
+                    INDIGO_FLOW_ID_PRINTF_FORMAT, id);
+        return INDIGO_ERROR_NOT_FOUND;
+    }
+    return ft_hash_flow_delete(ft, entry);
+}
+
+indigo_error_t
+ft_flow_first_match(ft_instance_t instance,
+                    of_meta_match_t *query,
+                    ft_entry_t **entry_ptr)
+{
+    ft_entry_t *entry;
+    list_links_t *cur, *next;
+
+    if (query->mode == OF_MATCH_STRICT) {
+        uint32_t state = 0;
+        while ((entry = hindex_lookup(instance->match_index,
+                                    &query->match, &state)) != NULL) {
+            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
+                    ft_flow_meta_match(query, entry)) {
+                if (entry_ptr) {
+                    *entry_ptr = entry;
+                }
+                return INDIGO_ERROR_NONE;
+            }
+        }
+    } else if (query->check_priority) { /* Iterate thru prio hash list */
+        uint32_t state = 0;
+        while ((entry = hindex_lookup(instance->priority_index,
+                                    &query->priority, &state)) != NULL) {
+            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
+                    ft_flow_meta_match(query, entry)) {
+                if (entry_ptr) {
+                    *entry_ptr = entry;
+                }
+                return INDIGO_ERROR_NONE;
+            }
+        }
+    } else { /* Iterate thru whole list */
+        FT_ITER(instance, entry, cur, next) {
+            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
+                    ft_flow_meta_match(query, entry)) {
+                if (entry_ptr) {
+                    *entry_ptr = entry;
+                }
+                return INDIGO_ERROR_NONE;
+            }
         }
     }
 
-    return 0;
+    return INDIGO_ERROR_NOT_FOUND;
 }
 
-/**
- * Determine if an entry's match agrees with the metamatch data
- * @param query The match information from the query
- * @param entry Pointer to the flow table entry being checked
- * @returns Boolean, true if entry matches meta_match data
- *
- * @fixme Is any additional canonicalization required for match data?
- */
+biglist_t *
+ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
+{
+    ft_entry_t *entry;
+    list_links_t *cur, *next;
+    biglist_t *list = NULL;
+    int count = 0;
+
+    if (query->mode == OF_MATCH_STRICT) {
+        uint32_t state = 0;
+        while ((entry = hindex_lookup(instance->match_index,
+                                    &query->match, &state)) != NULL) {
+            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
+                    ft_flow_meta_match(query, entry)) {
+                list = biglist_prepend(list, (void *)entry);
+                count += 1;
+            }
+        }
+    } else if (query->check_priority) {
+        /* Iterate thru prio hash list */
+        uint32_t state = 0;
+        while ((entry = hindex_lookup(instance->priority_index,
+                                    &query->priority, &state)) != NULL) {
+            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
+                    ft_flow_meta_match(query, entry)) {
+                list = biglist_prepend(list, (void *)entry);
+                count += 1;
+            }
+        }
+    } else { /* Iterate thru whole list */
+        FT_ITER(instance, entry, cur, next) {
+            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
+                    ft_flow_meta_match(query, entry)) {
+                list = biglist_prepend(list, (void *)entry);
+                count += 1;
+            }
+        }
+    }
+
+    LOG_TRACE("Query generated %d entries", count);
+    return list;
+}
+
+ft_entry_t *
+ft_id_lookup(ft_instance_t ft, indigo_flow_id_t id)
+{
+    return hindex_lookup(ft->flow_id_index, &id, NULL);
+}
 
 int
 ft_flow_meta_match(of_meta_match_t *query, ft_entry_t *entry)
@@ -142,338 +375,64 @@ ft_flow_meta_match(of_meta_match_t *query, ft_entry_t *entry)
     return rv;
 }
 
-/**
- * Hash an of_match_t
- */
-static uint32_t
-match_hash(const void *key)
-{
-    return murmur_hash(key, sizeof(of_match_t), 0);
-}
-
-/**
- * Check equality of two of_match_t's
- */
-static int
-match_equality(const void *key1, const void *key2)
-{
-    return memcmp(key1, key2, sizeof(of_match_t)) == 0;
-}
-
-/**
- * Create a flow table instance
- * @param config Pointer to configuration structure
- * @returns A handle for the flow table instance to be used
- * in all calls affecting this table instance
- *
- * If max_entries <= 0, use the default size
- *
- * The implementation of this function does not attempt to be abstract
- *
- */
-
-ft_instance_t
-ft_hash_create(ft_config_t *config)
-{
-    ft_instance_t ft;
-    int bytes;
-    int idx;
-
-    if (config->max_entries <= 0) {
-        LOG_ERROR("Hash flow table only supports fixed number of buckets");
-        return NULL;
-    }
-
-    /* Allocate the flow table itself */
-    ft = INDIGO_MEM_ALLOC(sizeof(*ft));
-    if (ft == NULL) {
-        LOG_ERROR("ERROR: Flow table (hash) creation failed");
-        return NULL;
-    }
-    INDIGO_MEM_SET(ft, 0, sizeof(*ft));
-    INDIGO_MEM_COPY(&ft->config,  config, sizeof(ft_config_t));
-
-    list_init(&ft->free_list);
-    list_init(&ft->all_list);
-
-    /* Allocate and init the flow entries */
-    bytes = sizeof(ft_entry_t) * config->max_entries;
-    ft->flow_entries = INDIGO_MEM_ALLOC(bytes);
-    if (ft->flow_entries == NULL) {
-        LOG_ERROR("ERROR: Flow table (hash) creation failed");
-        INDIGO_MEM_FREE(ft);
-        return NULL;
-    }
-    INDIGO_MEM_SET(ft->flow_entries, 0, bytes);
-
-    /* Put the flow entries on the free list */
-    for (idx = 0; idx < config->max_entries; idx++) {
-        list_push(&ft->free_list, &ft->flow_entries[idx].table_links);
-    }
-
-    ft->match_index = hindex_create(match_hash, match_equality,
-                                offsetof(struct ft_entry_s, match), 0);
-
-    ft->flow_id_index = hindex_create(hindex_uint64_hash, hindex_uint64_equality,
-                                  offsetof(struct ft_entry_s, id), 0);
-
-    ft->priority_index = hindex_create(hindex_uint16_hash, hindex_uint16_equality,
-                                   offsetof(struct ft_entry_s, priority), 0);
-
-    return ft;
-}
-
-/**
- * Add a flow entry to the table
- * @param ft The flow table handle
- * @param id The external flow identifier
- * @param flow_add The LOCI flow mod object resulting in the add
- * @param entry_p Output; pointer to place to store entry if successful
- *
- * If the an entry already exists, an error is returned.
- */
-
-indigo_error_t
-ft_hash_flow_add(ft_instance_t ft, indigo_flow_id_t id,
-                 of_flow_add_t *flow_add, ft_entry_t **entry_p)
-{
-    ft_entry_t *entry;
-    list_links_t *links;
-    indigo_error_t rv;
-
-    LOG_TRACE("Adding flow " INDIGO_FLOW_ID_PRINTF_FORMAT, id);
-
-    /* If flow ID already exists, error. */
-    if (ft_id_lookup(ft, id) != NULL) {
-        return INDIGO_ERROR_EXISTS;
-    }
-
-    /* Grab an entry from the free list */
-    if ((links = list_pop(&ft->free_list)) == NULL) {
-        ++(ft->status.table_full_errors);
-        return INDIGO_ERROR_RESOURCE;
-    }
-    entry = FT_ENTRY_CONTAINER(links, table);
-
-    if ((rv = ft_entry_setup(entry, id, flow_add)) < 0) {
-        return rv;
-    }
-
-    ft_entry_link(ft, entry);
-    ft->status.adds += 1;
-    ft->status.current_count += 1;
-
-    if (entry_p != NULL) {
-        *entry_p = entry;
-    }
-
-    return INDIGO_ERROR_NONE;
-}
-
-/**
- * Remove a specific flow entry from the table
- * @param ft The flow table handle
- * @param entry Pointer to the entry to be removed
- */
-
-indigo_error_t
-ft_hash_flow_delete(ft_instance_t ft, ft_entry_t *entry)
-{
-    LOG_TRACE("Delete rsn %d flow " INDIGO_FLOW_ID_PRINTF_FORMAT,
-              entry->removed_reason, entry->id);
-
-    if (entry->id == INDIGO_FLOW_ID_INVALID) {
-        LOG_ERROR("Deleting invalid flow table entry");
-        return INDIGO_ERROR_UNKNOWN;
-    }
-
-    /* Unlink from hash lists; clear entry; put it on the free list */
-    ft_entry_unlink(ft, entry);
-    ft_entry_clear(ft, entry);
-
-    INDIGO_ASSERT(entry->state == FT_FLOW_STATE_FREE);
-    list_push(&ft->free_list, &entry->table_links);
-    ft->status.current_count -= 1;
-    ft->status.deletes += 1;
-
-    return INDIGO_ERROR_NONE;
-}
-
-/**
- * Remove a flow entry from the table indicated by flow ID
- * @param ft The flow table handle
- * @param id Flow ID of the entry to remove
- *
- * Just looks up the entry and calls the above.
- */
-
-indigo_error_t
-ft_hash_flow_delete_id(ft_instance_t ft,
-                       indigo_flow_id_t id)
-{
-    ft_entry_t *entry;
-
-    if ((entry = ft_id_lookup(ft, id)) == NULL) {
-        LOG_VERBOSE("Delete: Failed to find flow "
-                    INDIGO_FLOW_ID_PRINTF_FORMAT, id);
-        return INDIGO_ERROR_NOT_FOUND;
-    }
-    return ft_hash_flow_delete(ft, entry);
-}
-
-/**
- * Delete a flow table instance and free resources
- * @param ft A handle for the flow table instance to be deleted
- *
- * Will call ft_entry_clear on all entries.
- *
- * Free underlying data structures
- */
-
 void
-ft_hash_delete(ft_instance_t ft)
+ft_flow_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
+                     indigo_fi_flow_removed_t reason)
 {
-    ft_entry_t *entry;
-    list_links_t *cur, *next;
-
-    if (ft == NULL) {
+    if (FT_FLOW_STATE_IS_DELETED(entry->state)) {
         return;
     }
 
-    FT_ITER(ft, entry, cur, next) {
-        ft_entry_unlink(ft, entry);
-        ft_entry_clear(ft, entry);
-    }
+    entry->state = FT_FLOW_STATE_DELETE_MARKED;
+    entry->removed_reason = reason;
 
-    if (ft->flow_entries != NULL) {
-        INDIGO_MEM_FREE(ft->flow_entries);
-        ft->flow_entries = NULL;
-    }
-
-    if (ft->flow_id_index != NULL) {
-        hindex_destroy(ft->flow_id_index);
-    }
-
-    if (ft->priority_index != NULL) {
-        hindex_destroy(ft->priority_index);
-    }
-
-    if (ft->match_index != NULL) {
-        hindex_destroy(ft->match_index);
-    }
-
-    INDIGO_MEM_FREE(ft);
+    ft->status.pending_deletes += 1;
 }
-
-/**
- * Query the flow table and return the first match if found
- * @param ft Handle for a flow table instance
- * @param query The meta-match data for the query
- * @param entry_ptr (out) Pointer to where to store the result if found
- * @returns INDIGO_ERROR_NONE if found; otherwise INDIGO_ERROR_NOT_FOUND
- *
- * entry_ptr may be NULL; Normally this is called with priority checked.
- */
 
 indigo_error_t
-ft_flow_first_match(ft_instance_t instance,
-                    of_meta_match_t *query,
-                    ft_entry_t **entry_ptr)
+ft_flow_modify_cookie(ft_instance_t instance, ft_entry_t *entry,
+                      uint64_t cookie, uint64_t cookie_mask)
 {
-    ft_entry_t *entry;
-    list_links_t *cur, *next;
+    entry->cookie = (entry->cookie & cookie_mask) | (cookie & cookie_mask);
 
-    if (query->mode == OF_MATCH_STRICT) {
-        uint32_t state = 0;
-        while ((entry = hindex_lookup(instance->match_index,
-                                    &query->match, &state)) != NULL) {
-            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
-                if (entry_ptr) {
-                    *entry_ptr = entry;
-                }
-                return INDIGO_ERROR_NONE;
-            }
-        }
-    } else if (query->check_priority) { /* Iterate thru prio hash list */
-        uint32_t state = 0;
-        while ((entry = hindex_lookup(instance->priority_index,
-                                    &query->priority, &state)) != NULL) {
-            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
-                if (entry_ptr) {
-                    *entry_ptr = entry;
-                }
-                return INDIGO_ERROR_NONE;
-            }
-        }
-    } else { /* Iterate thru whole list */
-        FT_ITER(instance, entry, cur, next) {
-            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
-                if (entry_ptr) {
-                    *entry_ptr = entry;
-                }
-                return INDIGO_ERROR_NONE;
-            }
-        }
-    }
-
-    return INDIGO_ERROR_NOT_FOUND;
+    return INDIGO_ERROR_NONE;
 }
 
-/**
- * Query the flow table and return all matches
- * @param ft Handle for a flow table instance
- * @param query The meta-match data for the query
- * @returns A list with pointers to ft_entry_t
- *
- * @fixme Currently we don't/can't check for failed alloc in biglist.
- */
-
-biglist_t *
-ft_flow_query(ft_instance_t instance, of_meta_match_t *query)
+indigo_error_t
+ft_flow_modify_effects(ft_instance_t instance,
+                       ft_entry_t *entry,
+                       of_flow_modify_t *flow_mod)
 {
-    ft_entry_t *entry;
-    list_links_t *cur, *next;
-    biglist_t *list = NULL;
-    int count = 0;
+    indigo_error_t err;
 
-    if (query->mode == OF_MATCH_STRICT) {
-        uint32_t state = 0;
-        while ((entry = hindex_lookup(instance->match_index,
-                                    &query->match, &state)) != NULL) {
-            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
-                list = biglist_prepend(list, (void *)entry);
-                count += 1;
-            }
-        }
-    } else if (query->check_priority) {
-        /* Iterate thru prio hash list */
-        uint32_t state = 0;
-        while ((entry = hindex_lookup(instance->priority_index,
-                                    &query->priority, &state)) != NULL) {
-            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
-                list = biglist_prepend(list, (void *)entry);
-                count += 1;
-            }
-        }
-    } else { /* Iterate thru whole list */
-        FT_ITER(instance, entry, cur, next) {
-            if (!FT_FLOW_STATE_IS_DELETED(entry->state) &&
-                    ft_flow_meta_match(query, entry)) {
-                list = biglist_prepend(list, (void *)entry);
-                count += 1;
-            }
-        }
+    LOG_TRACE("Modifying effects of entry " INDIGO_FLOW_ID_PRINTF_FORMAT,
+              entry->id);
+
+    err = ft_flow_set_effects(entry, flow_mod);
+    if (err == INDIGO_ERROR_NONE) {
+        instance->status.updates += 1;
     }
 
-    LOG_TRACE("Query generated %d entries", count);
-    return list;
+    return err;
 }
 
+indigo_error_t
+ft_flow_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes)
+{
+    if (packets) {
+        *packets = entry->packets;
+    }
+    if (bytes) {
+        *bytes = entry->bytes;
+    }
+
+    entry->packets = 0;
+    entry->bytes = 0;
+
+    /* @fixme Update last counter update/change? */
+
+    return INDIGO_ERROR_NONE;
+}
 
 /*
  * Flowtable iterator task
@@ -525,25 +484,6 @@ ft_iter_task_callback(void *cookie)
     return IND_SOC_TASK_CONTINUE;
 }
 
-/**
- * Spawn a task that iterates over the flowtable
- *
- * @param ft Handle for a flow table instance
- * @param query The meta-match data for the query (or NULL)
- * @param callback Function called for each flowtable entry
- * @returns An error code
- *
- * This function does not guarantee a consistent view of the
- * flowtable over the course of the task.
- *
- * This function does not use any indexes on the flowtable.
- *
- * The callback function will be called with a NULL entry argument at
- * the end of the iteration.
- *
- * Deleted entries are skipped.
- */
-
 indigo_error_t
 ft_spawn_iter_task(ft_instance_t instance,
                    of_meta_match_t *query,
@@ -580,8 +520,147 @@ ft_spawn_iter_task(ft_instance_t instance,
 }
 
 /**
- * Populate a list of output ports from actions
+ * Hash an of_match_t
  */
+static uint32_t
+match_hash(const void *key)
+{
+    return murmur_hash(key, sizeof(of_match_t), 0);
+}
+
+/**
+ * Check equality of two of_match_t's
+ */
+static int
+match_equality(const void *key1, const void *key2)
+{
+    return memcmp(key1, key2, sizeof(of_match_t)) == 0;
+}
+
+/**
+ * Link an entry into the appropriate lists for the FT
+ */
+
+static void
+ft_entry_link(ft_instance_t ft, ft_entry_t *entry)
+{
+    if (ft == NULL || entry == NULL) {
+        FT_ASSERT(!"ft_entry_link called with NULL ft or entry");
+        return;
+    }
+
+    /* Link to full table iteration */
+    list_push(&ft->all_list, &entry->table_links);
+
+    hindex_insert(ft->flow_id_index, entry);
+    hindex_insert(ft->priority_index, entry);
+    hindex_insert(ft->match_index, entry);
+}
+
+/**
+ * Unlink an entry from the appropriate lists for the FT
+ */
+
+static void
+ft_entry_unlink(ft_instance_t ft, ft_entry_t *entry)
+{
+    if (ft == NULL || entry == NULL) {
+        FT_ASSERT(!"ft_entry_unlink called with NULL ft or entry");
+        return;
+    }
+
+    FT_ASSERT(!list_empty(&ft->all_list));
+
+    /* Remove from full table iteration */
+    list_remove(&entry->table_links);
+
+    hindex_remove(ft->flow_id_index, entry);
+    hindex_remove(ft->priority_index, entry);
+    hindex_remove(ft->match_index, entry);
+}
+
+/**
+ * Initialize the data for a flow entry that is being added
+ *
+ * @param entry Pointer to entry being initialized
+ * @param id The flow ID to use
+ * @param flow_add Pointer to the flow add object for the entry
+ *
+ * The list links are not modified by this call.
+ */
+static indigo_error_t
+ft_entry_setup(ft_entry_t *entry, indigo_flow_id_t id, of_flow_add_t *flow_add)
+{
+    of_flow_add_t *dup;
+    indigo_error_t err;
+
+    INDIGO_ASSERT(entry->state == FT_FLOW_STATE_FREE);
+
+    entry->id = id;
+    dup = (of_flow_add_t *)of_object_dup(flow_add);
+    if (dup == NULL) {
+        return INDIGO_ERROR_RESOURCE;
+    }
+
+    entry->state = FT_FLOW_STATE_NEW;
+    entry->queued_reqs = NULL;
+    entry->flow_add = dup;
+    if (of_flow_add_match_get(flow_add, &entry->match) < 0) {
+        of_object_delete(dup);
+        return INDIGO_ERROR_UNKNOWN;
+    }
+    of_flow_add_cookie_get(flow_add, &entry->cookie);
+    of_flow_add_priority_get(flow_add, &entry->priority);
+    of_flow_add_flags_get(flow_add, &entry->flags);
+    of_flow_add_idle_timeout_get(flow_add, &entry->idle_timeout);
+    of_flow_add_hard_timeout_get(flow_add, &entry->hard_timeout);
+
+    err = ft_flow_set_effects(entry, flow_add);
+    if (err != INDIGO_ERROR_NONE) {
+        return err;
+    }
+
+    entry->insert_time = INDIGO_CURRENT_TIME;
+    entry->last_counter_change = entry->insert_time;
+
+    return INDIGO_ERROR_NONE;
+}
+
+/**
+ * Release the data associated with an entry
+ *
+ * @param entry Pointer to entry being initialized
+ *
+ * The list links are not modified by this call.
+ *
+ * The entry ID and state are updated and pending deletes count is
+ * decremented.
+ */
+static void
+ft_entry_clear(ft_instance_t ft, ft_entry_t *entry)
+{
+    if (entry->output_ports != NULL) {
+        biglist_free(entry->output_ports);
+        entry->output_ports = NULL;
+    }
+    if (entry->effects.actions != NULL) {
+        of_list_action_delete(entry->effects.actions);
+        entry->effects.actions = NULL;
+    }
+    if (entry->flow_add != NULL) {
+        of_flow_add_delete(entry->flow_add);
+        entry->flow_add = NULL;
+    }
+
+    biglist_free(entry->queued_reqs);
+    entry->id = INDIGO_FLOW_ID_INVALID;
+
+    /* If entry was being deleted, pending deletes gets decremented */
+    if (FT_FLOW_STATE_IS_DELETED(entry->state)) {
+        ft->status.pending_deletes -= 1;
+    }
+    entry->state = FT_FLOW_STATE_FREE;
+}
 
 static biglist_t *
 out_port_list_populate_from_actions(of_list_action_t *actions)
@@ -653,192 +732,20 @@ ft_flow_set_effects(ft_entry_t *entry,
 }
 
 /**
- * Link an entry into the appropriate lists for the FT
+ * Determine if the given entry has port as an output port
  */
-
-static void
-ft_entry_link(ft_instance_t ft, ft_entry_t *entry)
+static inline int
+entry_has_out_port(ft_entry_t *entry, of_port_no_t port)
 {
-    if (ft == NULL || entry == NULL) {
-        FT_ASSERT(!"ft_entry_link called with NULL ft or entry");
-        return;
+    biglist_t *elt;
+    of_port_no_t chk_port;
+
+    for (elt = entry->output_ports; elt != NULL; elt = elt->next) {
+        chk_port = (uintptr_t)elt->data;
+        if (port == chk_port) {
+            return 1;
+        }
     }
 
-    /* Link to full table iteration */
-    list_push(&ft->all_list, &entry->table_links);
-
-    hindex_insert(ft->flow_id_index, entry);
-    hindex_insert(ft->priority_index, entry);
-    hindex_insert(ft->match_index, entry);
-}
-
-/**
- * Unlink an entry into the appropriate lists for the FT
- */
-
-static void
-ft_entry_unlink(ft_instance_t ft, ft_entry_t *entry)
-{
-    if (ft == NULL || entry == NULL) {
-        FT_ASSERT(!"ft_entry_unlink called with NULL ft or entry");
-        return;
-    }
-
-    FT_ASSERT(!list_empty(&ft->all_list));
-
-    /* Remove from full table iteration */
-    list_remove(&entry->table_links);
-
-    hindex_remove(ft->flow_id_index, entry);
-    hindex_remove(ft->priority_index, entry);
-    hindex_remove(ft->match_index, entry);
-}
-
-ft_entry_t *
-ft_id_lookup(ft_instance_t ft, indigo_flow_id_t id)
-{
-    return hindex_lookup(ft->flow_id_index, &id, NULL);
-}
-
-
-indigo_error_t
-ft_flow_modify_cookie(ft_instance_t instance, ft_entry_t *entry,
-                      uint64_t cookie, uint64_t cookie_mask)
-{
-    entry->cookie = (entry->cookie & cookie_mask) | (cookie & cookie_mask);
-
-    return INDIGO_ERROR_NONE;
-}
-
-indigo_error_t
-ft_flow_modify_effects(ft_instance_t instance,
-                       ft_entry_t *entry,
-                       of_flow_modify_t *flow_mod)
-{
-    indigo_error_t err;
-
-    LOG_TRACE("Modifying effects of entry " INDIGO_FLOW_ID_PRINTF_FORMAT,
-              entry->id);
-
-    err = ft_flow_set_effects(entry, flow_mod);
-    if (err == INDIGO_ERROR_NONE) {
-        instance->status.updates += 1;
-    }
-
-    return err;
-}
-
-indigo_error_t
-ft_flow_clear_counters(ft_entry_t *entry, uint64_t *packets, uint64_t *bytes)
-{
-    if (packets) {
-        *packets = entry->packets;
-    }
-    if (bytes) {
-        *bytes = entry->bytes;
-    }
-
-    entry->packets = 0;
-    entry->bytes = 0;
-
-    /* @fixme Update last counter update/change? */
-
-    return INDIGO_ERROR_NONE;
-}
-
-/**
- * Initialize the data for a flow entry that is being added
- *
- * @param entry Pointer to entry being initialized
- * @param id The flow ID to use
- * @param flow_add Pointer to the flow add object for the entry
- *
- * The list links are not modified by this call.
- */
-static indigo_error_t
-ft_entry_setup(ft_entry_t *entry, indigo_flow_id_t id, of_flow_add_t *flow_add)
-{
-    of_flow_add_t *dup;
-    indigo_error_t err;
-
-    INDIGO_ASSERT(entry->state == FT_FLOW_STATE_FREE);
-
-    entry->id = id;
-    dup = (of_flow_add_t *)of_object_dup(flow_add);
-    if (dup == NULL) {
-        return INDIGO_ERROR_RESOURCE;
-    }
-
-    entry->state = FT_FLOW_STATE_NEW;
-    entry->queued_reqs = NULL;
-    entry->flow_add = dup;
-    if (of_flow_add_match_get(flow_add, &entry->match) < 0) {
-        of_object_delete(dup);
-        return INDIGO_ERROR_UNKNOWN;
-    }
-    of_flow_add_cookie_get(flow_add, &entry->cookie);
-    of_flow_add_priority_get(flow_add, &entry->priority);
-    of_flow_add_flags_get(flow_add, &entry->flags);
-    of_flow_add_idle_timeout_get(flow_add, &entry->idle_timeout);
-    of_flow_add_hard_timeout_get(flow_add, &entry->hard_timeout);
-
-    err = ft_flow_set_effects(entry, flow_add);
-    if (err != INDIGO_ERROR_NONE) {
-        return err;
-    }
-
-    entry->insert_time = INDIGO_CURRENT_TIME;
-    entry->last_counter_change = entry->insert_time;
-
-    return INDIGO_ERROR_NONE;
-}
-
-void
-ft_flow_mark_deleted(ft_instance_t ft, ft_entry_t *entry,
-                     indigo_fi_flow_removed_t reason)
-{
-    if (FT_FLOW_STATE_IS_DELETED(entry->state)) {
-        return;
-    }
-
-    entry->state = FT_FLOW_STATE_DELETE_MARKED;
-    entry->removed_reason = reason;
-
-    ft->status.pending_deletes += 1;
-}
-
-/**
- * Release the data associated with an entry
- *
- * @param entry Pointer to entry being initialized
- *
- * The list links are not modified by this call.
- *
- * The entry ID and state are updated and pending deletes count is
- * decremented.
- */
-static void
-ft_entry_clear(ft_instance_t ft, ft_entry_t *entry)
-{
-    if (entry->output_ports != NULL) {
-        biglist_free(entry->output_ports);
-        entry->output_ports = NULL;
-    }
-    if (entry->effects.actions != NULL) {
-        of_list_action_delete(entry->effects.actions);
-        entry->effects.actions = NULL;
-    }
-    if (entry->flow_add != NULL) {
-        of_flow_add_delete(entry->flow_add);
-        entry->flow_add = NULL;
-    }
-
-    biglist_free(entry->queued_reqs);
-    entry->id = INDIGO_FLOW_ID_INVALID;
-
-    /* If entry was being deleted, pending deletes gets decremented */
-    if (FT_FLOW_STATE_IS_DELETED(entry->state)) {
-        ft->status.pending_deletes -= 1;
-    }
-    entry->state = FT_FLOW_STATE_FREE;
+    return 0;
 }
