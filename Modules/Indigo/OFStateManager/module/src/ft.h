@@ -152,8 +152,6 @@ struct ft_public_s {
     struct hindex *flow_id_index;  /* hashtable keyed on flow id */
     struct hindex *priority_index; /* hashtable keyed on priority */
     struct hindex *match_index;    /* hashtable keyed on strict match */
-
-    uint32_t magic; /* For debug/error checking */
 };
 
 #define FT_CONFIG(_ft) (&(_ft)->config)
