@@ -348,18 +348,6 @@ indigo_error_t ft_first_match(ft_instance_t instance,
                               ft_entry_t **entry_ptr);
 
 /**
- * Query the flow table and return all matches
- * @param ft Handle for a flow table instance
- * @param query The meta-match data for the query
- * @returns A list with pointers to ft_entry_t
- *
- * @fixme Currently we don't/can't check for failed alloc in biglist.
- */
-
-biglist_t *ft_query(ft_instance_t instance,
-                    of_meta_match_t *query);
-
-/**
  * Look up a flow by ID
  *
  * @param ft The flow table instance
