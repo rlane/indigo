@@ -540,6 +540,13 @@ listen_cxn_init(connection_t *cxn)
     }
     cxn_addr.sin_port = htons(params->controller_port);
 
+    /* Enable SO_REUSEADDR */
+    {
+        int flag = 1;
+        (void) setsockopt(cxn->sd, SOL_SOCKET, SO_REUSEADDR,
+                          (char *) &flag, sizeof(int));
+    }
+
     /* bind the socket to the port number */
     if (bind(cxn->sd, (struct sockaddr *) &cxn_addr, sizeof(cxn_addr)) == -1) {
         LOG_ERROR("Could not bind to socket for local cxn: %s", strerror(errno));
